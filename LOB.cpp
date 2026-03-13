@@ -1,17 +1,35 @@
-#include <bits/stdc++.h>
+#include <iostream>
+#include <string>
+#include <map>
+#include <unordered_map>
+#include <limits>
+#include <algorithm>
+
 using namespace std;
-// first iteration of LOB, where the orders are stored in vectors and sorted after each addition. This is not the most efficient way to implement an order book, but it serves as a simple starting point.
-// Using LOBSTER data to test the implementation, which can be found at https://lobsterdata.com/info/data_files. The data files are in CSV format and contain historical order book data for various stocks.
+/*TOFIX : When market orders are placed, they are placed by just placing an order with price = max or min long, and then trying to match it. 
+This causes extra messages to be printed about the market order being partially filled at its price, which is confusing. In a real implementation, market orders would likely be handled as a special case within the matching logic to avoid this.
+Adress this when implimenting the bots.
+
+- Add Text promts for ammends
+*/
+// Forward declaration so Order knows Limit exists
+class Limit;
+
 class Order {
 public:
     int orderId;
-    bool isBuy; // true for Buy, false for Sell
-    string orderType; // "L" or "M"
+    bool isBuy;
+    string orderType;
     double price;
     int quantity;
-    long long timestamp; // seconds from midnight
+    long long timestamp;
 
-    Order(int id, bool buy, string type, double p, int q , long long ts)
+    // DLL pointers
+    Order* nextOrder = nullptr;
+    Order* prevOrder = nullptr;
+    Limit* parentLimit = nullptr;
+
+    Order(int id, bool buy, string type, double p, int q, long long ts)
     {
         orderId = id;
         isBuy = buy;
@@ -20,8 +38,8 @@ public:
         quantity = q;
         timestamp = ts;
     }
+
     string getReadableTime() const {
-        //time given in seconds from midnight, convert to HH:MM:SS format
         long long hours = timestamp / 3600;
         long long minutes = (timestamp % 3600) / 60;
         long long seconds = timestamp % 60;
@@ -29,212 +47,489 @@ public:
         snprintf(buffer, sizeof(buffer), "%02lld:%02lld:%02lld", hours, minutes, seconds);
         return string(buffer);
     }
-    };
+};
 
-class OrderBook {
+
+class Limit {
 public:
-    vector<Order> buyOrders;
-    vector<Order> sellOrders;
-    // todo : remove orders who have 0 quantity inside sortOrders
-    void sortOrders() {
-        buyOrders.erase(remove_if(buyOrders.begin(), buyOrders.end(), [](const Order &order) { return order.quantity == 0; }), buyOrders.end());
-        sellOrders.erase(remove_if(sellOrders.begin(), sellOrders.end(), [](const Order &order) { return order.quantity == 0; }), sellOrders.end());
+    double price;
+    double totalQuantity;
+    int orderCount;
 
-        sort(buyOrders.begin(), buyOrders.end(), [](const Order &a, const Order &b) {
-            if (a.price == b.price) return a.timestamp < b.timestamp;
-            return a.price > b.price;
-        });
-        sort(sellOrders.begin(), sellOrders.end(), [](const Order &a, const Order &b) {
-            if (a.price == b.price) return a.timestamp < b.timestamp;
-            return a.price < b.price;
-        });
-    }
+    Order* head;
+    Order* tail;
 
-    void addLimitOrder(Order order) {
-        if (order.isBuy) {
-            for (auto &sellOrder : sellOrders) {
-                if (order.quantity == 0) break;
-                if (sellOrder.quantity == 0) continue;
-                if (sellOrder.price <= order.price) {
-                    int tradeQty = min(order.quantity, sellOrder.quantity);
-                    double tradePrice = sellOrder.price;
-                    cout << "Trade Executed: Buy " << order.orderId
-                         << " with Sell " << sellOrder.orderId
-                         << " Qty: " << tradeQty << " Price: " << tradePrice << "\n";
-                    order.quantity -= tradeQty;
-                    sellOrder.quantity -= tradeQty;
-                }
-            }
-            if (order.quantity > 0) buyOrders.push_back(order);
+    Limit(double p) : price(p), totalQuantity(0), orderCount(0), head(nullptr), tail(nullptr) {}
+
+    bool isEmpty() const { return head == nullptr; }
+
+    // O(1) add to back of queue (time priority)
+    void addOrder(Order* order) {
+        order->parentLimit = this;
+        order->nextOrder = nullptr;
+
+        if (head == nullptr) {
+            head = order;
+            tail = order;
+            order->prevOrder = nullptr;
         } else {
-            for (auto &buyOrder : buyOrders) {
-                if (order.quantity == 0) break;
-                if (buyOrder.quantity == 0) continue;
-                if (buyOrder.price >= order.price) {
-                    int tradeQty = min(order.quantity, buyOrder.quantity);
-                    double tradePrice = buyOrder.price;
-                    cout << "Trade Executed: Sell " << order.orderId
-                         << " with Buy " << buyOrder.orderId
-                         << " Qty: " << tradeQty << " Price: " << tradePrice << "\n";
-                    order.quantity -= tradeQty;
-                    buyOrder.quantity -= tradeQty;
-                }
-            }
-            if (order.quantity > 0) sellOrders.push_back(order);
+            order->prevOrder = tail;
+            tail->nextOrder = order;
+            tail = order;
         }
-        sortOrders();
+
+        orderCount++;
+        totalQuantity += order->quantity;
     }
 
-    void addMarketOrder(Order order) {
-        if (order.isBuy) {
-            for (auto &sellOrder : sellOrders) {
-                if (order.quantity == 0) break;
-                if (sellOrder.quantity == 0) continue;
-                int tradeQty = min(order.quantity, sellOrder.quantity);
-                double tradePrice = sellOrder.price;
-                cout << "Trade Executed: Market Buy " << order.orderId
-                    << " with Sell " << sellOrder.orderId
-                    << " Qty: " << tradeQty << " Price: " << tradePrice << "\n";
-                order.quantity -= tradeQty;
-                sellOrder.quantity -= tradeQty;
-            }
+    // O(1) remove — caller already has the pointer
+    void removeOrder(Order* order) {
+        if (order->prevOrder != nullptr) {
+            order->prevOrder->nextOrder = order->nextOrder;
         } else {
-            for (auto &buyOrder : buyOrders) {
-                if (order.quantity == 0) break;
-                if (buyOrder.quantity == 0) continue;
-                int tradeQty = min(order.quantity, buyOrder.quantity);
-                double tradePrice = buyOrder.price;
-                cout << "Trade Executed: Market Sell " << order.orderId
-                    << " with Buy " << buyOrder.orderId
-                    << " Qty: " << tradeQty << " Price: " << tradePrice << "\n";
-                order.quantity -= tradeQty;
-                buyOrder.quantity -= tradeQty;
-            }
+            head = order->nextOrder;
         }
-        sortOrders();
+
+        if (order->nextOrder != nullptr) {
+            order->nextOrder->prevOrder = order->prevOrder;
+        } else {
+            tail = order->prevOrder;
+        }
+
+        order->prevOrder = nullptr;
+        order->nextOrder = nullptr;
+        order->parentLimit = nullptr;
+
+        orderCount--;
+        totalQuantity -= order->quantity;
     }
 
-    void removeOrder(int orderId) {
-        buyOrders.erase(remove_if(buyOrders.begin(), buyOrders.end(),
-            [orderId](const Order &o){ return o.orderId == orderId; }), buyOrders.end());
-        sellOrders.erase(remove_if(sellOrders.begin(), sellOrders.end(),
-            [orderId](const Order &o){ return o.orderId == orderId; }), sellOrders.end());
-        sortOrders();
-    }
-    void reduceOrder(int orderId, int reduceQty) {
-        for (auto &o : buyOrders) {
-            if (o.orderId == orderId) {
-                o.quantity = max(0, o.quantity - reduceQty);
-                return;
-            }
+    void printOrderRecords() const {
+        Order* current = head;
+        cout << "Limit Price: " << price << " | Total Vol: " << totalQuantity << " -> Queue: [ ";
+        while (current != nullptr) {
+            cout << current->orderId << "(Q:" << current->quantity << ") ";
+            current = current->nextOrder;
         }
-        for (auto &o : sellOrders) {
-            if (o.orderId == orderId) {
-                o.quantity = max(0, o.quantity - reduceQty);
-                return;
-            }
-        }
-        sortOrders();
-    }
-    void listOrders() {
-        cout << "\n--- Order Book ---\n";
-        cout << "Buy Orders:\n";
-        for (const auto &o : buyOrders) {
-            if (o.quantity > 0)
-                cout << "ID: " << o.orderId 
-                    << " Price: " << o.price 
-                    << " Qty: " << o.quantity 
-                    << " Time: " << o.getReadableTime() << "\n";
-        }
-        cout << "Sell Orders:\n";
-        for (const auto &o : sellOrders) {
-            if (o.quantity > 0)
-                cout << "ID: " << o.orderId 
-                    << " Price: " << o.price 
-                    << " Qty: " << o.quantity 
-                    << " Time: " << o.getReadableTime() << "\n";
-        }
-        cout << "------------------\n";
-    }
-    // add a function to just print the best bid and ask, along with best bid and ask quantities
-    vector<double> printBestBidAsk() {
-        vector<double> bestBidAsk(4, 0.0); // bestBid, bestBidQty, bestAsk, bestAskQty
-        double bestBid = buyOrders.empty() ? 0.0 : buyOrders.front().price;
-        int bestBidQty = buyOrders.empty() ? 0 : buyOrders.front().quantity;
-        double bestAsk = sellOrders.empty() ? 0.0 : sellOrders.front().price;
-        int bestAskQty = sellOrders.empty() ? 0 : sellOrders.front().quantity;
-
-        bestBidAsk[0] = bestBid;
-        bestBidAsk[1] = bestBidQty;
-        bestBidAsk[2] = bestAsk;
-        bestBidAsk[3] = bestAskQty;
-
-        return bestBidAsk;
+        cout << "]\n";
     }
 };
 
+
+class OrderBook {
+public:
+    // Best bid at front (highest first), best ask at front (lowest first)
+    map<double, Limit*, greater<double>> bidLimits;
+    map<double, Limit*, less<double>>    askLimits;
+
+    // O(1) lookup by orderId for amend/cancel
+    unordered_map<int, Order*> orderIdMap;
+
+    int matchedQuantity = 0;
+
+    // -------------------------------------------------------
+    // Public interface
+    // -------------------------------------------------------
+
+    void addOrder(Order* order) {
+        if (order->isBuy) {
+            // Try to match against existing asks before resting
+            tryMatch(order, askLimits);
+        } else {
+            tryMatch(order, bidLimits);
+        }
+
+        // If fully filled, nothing left to rest
+        if (order->quantity == 0) {
+            return;
+        }
+
+        // Rest the remaining quantity at its price level
+        if(order->isBuy) {
+            restOrder(order, bidLimits);
+        } else {    
+            restOrder(order, askLimits);
+        }
+    }
+
+    // Amend = cancel + re-add (loses time priority, same as reference impl)
+    void amendOrder(int orderId, double newPrice, int newQuantity) {
+        if (!orderIdMap.count(orderId)) {
+            cerr << "amendOrder: order id " << orderId << " not found\n";
+            return;
+        }
+        Order* order = orderIdMap[orderId];
+        order->price    = newPrice;
+        order->quantity = newQuantity;
+
+        removeOrder(orderId);
+        addOrder(order);
+    }
+
+    void removeOrder(int orderId) {
+        if (!orderIdMap.count(orderId)) {
+            cerr << "removeOrder: order id " << orderId << " not found\n";
+            return;
+        }
+
+        Order* order = orderIdMap[orderId];
+        Limit* limit = order->parentLimit;
+
+        limit->removeOrder(order);
+        orderIdMap.erase(orderId);
+
+        // Clean up empty price levels (mirrors reference impl)
+        if (limit->isEmpty()) {
+            if (order->isBuy) {
+                bidLimits.erase(limit->price);
+            } else {
+                askLimits.erase(limit->price);
+            }
+            delete limit;
+        }
+    }
+
+    // -------------------------------------------------------
+    // Market orders
+    // -------------------------------------------------------
+
+    void placeMarketBuyOrder(int quantity) {
+        if (askLimits.empty()) {
+            cout << "No asks available to fill market buy order\n";
+            return;
+        }
+        // Price max so it crosses every ask
+        Order* marketOrder = new Order{-1, true, "market",
+                                       numeric_limits<double>::max(), quantity, 0};
+        tryMatch(marketOrder, askLimits);
+        if (marketOrder->quantity > 0) {
+            cout << "Market buy partially filled, " << marketOrder->quantity << " units remaining\n";
+        } else {
+            cout << "Market buy completely filled\n";
+        }
+        delete marketOrder;
+    }
+
+    void placeMarketSellOrder(int quantity) {
+        if (bidLimits.empty()) {
+            cout << "No bids available to fill market sell order\n";
+            return;
+        }
+        Order* marketOrder = new Order{-1, false, "market", // doing this causes addition confusing output message as order it -1;
+                                       numeric_limits<double>::lowest(), quantity, 0};
+        tryMatch(marketOrder, bidLimits);
+        if (marketOrder->quantity > 0) {
+            cout << "Market sell partially filled, " << marketOrder->quantity << " units remaining\n";
+        } else {
+            cout << "Market sell completely filled\n";
+        }
+        delete marketOrder;
+    }
+
+    // -------------------------------------------------------
+    // Helpers / display
+    // -------------------------------------------------------
+
+    double getBestBidPrice() const {
+        return bidLimits.empty() ? -1.0 : bidLimits.begin()->first;
+    }
+
+    double getBestAskPrice() const {
+        return askLimits.empty() ? -1.0 : askLimits.begin()->first;
+    }
+
+    double getSpread() const {
+        if (bidLimits.empty() || askLimits.empty()) return -1.0;
+        return getBestAskPrice() - getBestBidPrice();
+    }
+
+    void printBook() const {
+        cout << "\n=== ORDER BOOK ===\n";
+        cout << "-- ASKS (lowest first) --\n";
+        for (auto it = askLimits.begin(); it != askLimits.end(); ++it) {
+            it->second->printOrderRecords();
+        }
+        cout << "-- BIDS (highest first) --\n";
+        for (auto& [price, limit] : bidLimits) {
+            limit->printOrderRecords();
+        }
+        cout << "Spread: " << getSpread() << "\n";
+        cout << "Total matched qty so far: " << matchedQuantity << "\n\n";
+    }
+
+private:
+    // -------------------------------------------------------
+    // Internal helpers
+    // -------------------------------------------------------
+
+    // Place a resting order into the correct limit level
+    template<typename LimitMap>
+    void restOrder(Order* order, LimitMap& limitSide) {
+        auto it = limitSide.find(order->price);
+        Limit* limit;
+        if (it != limitSide.end()) {
+            limit = it->second;
+        } else {
+            limit = new Limit(order->price);
+            limitSide[order->price] = limit;
+        }
+        limit->addOrder(order);
+        orderIdMap[order->orderId] = order;
+    }
+
+    // Match incoming order against the opposing side
+    // Mirrors OrderBook<T>::TryMatch from the reference implementation
+    template<typename LimitMap>
+    void tryMatch(Order* incoming, LimitMap& opposingLimits) {
+        const bool isBuy = incoming->isBuy;
+        auto opposingIter = opposingLimits.begin();
+
+        while (opposingIter != opposingLimits.end() && incoming->quantity > 0) {
+            double opposingPrice = opposingIter->first;
+
+            // Price crossing check — same logic as the reference impl
+            if ((isBuy  && incoming->price < opposingPrice) ||
+                (!isBuy && incoming->price > opposingPrice)) {
+                break;
+            }
+
+            Limit* limit = opposingIter->second;
+            Order* restingPtr = limit->head;
+
+            while (restingPtr != nullptr && incoming->quantity > 0) {
+                int matchedQty = min(restingPtr->quantity, incoming->quantity);
+
+                restingPtr->quantity -= matchedQty;
+                limit->totalQuantity -= matchedQty;
+                incoming->quantity   -= matchedQty;
+                matchedQuantity      += matchedQty;
+
+                cout << (isBuy ? "BUY" : "SELL") << " order " << incoming->orderId
+                     << (matchedQty < incoming->quantity + matchedQty ? " partially" : "")
+                     << " filled @ " << opposingPrice << "\n";
+                cout << (isBuy ? "SELL" : "BUY") << " order " << restingPtr->orderId
+                     << (restingPtr->quantity == 0 ? "" : " partially")
+                     << " filled @ " << opposingPrice << "\n";
+
+                if (restingPtr->quantity == 0) {
+                    Order* next = restingPtr->nextOrder;
+                    int filledId = restingPtr->orderId;
+
+                    limit->removeOrder(restingPtr);
+                    orderIdMap.erase(filledId);
+
+                    if (limit->isEmpty()) {
+                        opposingIter = opposingLimits.erase(opposingIter);
+                        delete limit;
+                        limit = nullptr;
+                        restingPtr = next; // next is now dangling from erased limit, but we break below
+                        break;             // limit gone — move to next price level
+                    }
+
+                    restingPtr = next;
+                } else {
+                    break; // resting order partially filled — stays at front
+                }
+            }
+
+            if (limit != nullptr) {
+                ++opposingIter; // limit still exists, advance normally
+            }
+            // if limit was erased, opposingIter already points to the next element
+        }
+    }
+};
+
+
+// -------------------------------------------------------
+// Quick smoke test
+// -------------------------------------------------------
+/*
 int main() {
-    string msgFilename = "AMZN_2012-06-21_34200000_57600000_message_1.csv"; // Replace with your message file 
-    ifstream msgFile(msgFilename);
-    
-    if (!msgFile.is_open()) {
-        cerr << "Error: Could not open LOBSTER file!\n";
-        return 1;
+    OrderBook book;
+
+    // Resting asks
+    book.addOrder(new Order{1, false, "limit", 102.0, 10, 1000});
+    book.addOrder(new Order{2, false, "limit", 103.0, 5,  1001});
+    book.addOrder(new Order{3, false, "limit", 101.0, 8,  1002});
+
+    // Resting bids
+    book.addOrder(new Order{4, true, "limit", 99.0,  6, 1003});
+    book.addOrder(new Order{5, true, "limit", 98.0,  4, 1004});
+
+    book.printBook();
+
+    // Aggressive buy that crosses ask at 101
+    cout << "-- Adding aggressive buy @ 101.5 qty 5 --\n";
+    book.addOrder(new Order{6, true, "limit", 101.5, 5, 1005});
+    book.printBook();
+
+    // Market buy
+    cout << "-- Market buy qty 6 --\n";
+    book.placeMarketBuyOrder(6);                
+    book.printBook();
+
+    // Amend order 4 (bid) to a higher price
+    cout << "-- Amending order 4 to price 100 qty 10 --\n"; // ratther than changing that same order create a new order; No this would cause problem in cancelling
+    book.amendOrder(4, 100.0, 10);
+    book.printBook();
+
+    // Cancel order 5
+    cout << "-- Cancelling order 5 --\n";
+    book.removeOrder(5);
+    book.printBook();
+
+    return 0;
+}
+*/
+// -------------------------------------------------------
+// EDGE CASE TESTS
+// Replace the main() in OrderBook.cpp with this
+// -------------------------------------------------------
+
+
+//Test 2 (testing edge cases)
+/*
+int main() {
+
+    // -------------------------------------------------------
+    // TEST 1: Partial fill label bug probe
+    // Incoming buy qty 10, resting ask qty 4 then qty 4
+    // After first match: matchedQty=4, incoming->quantity=6
+    // condition: 4 < 6+4=10 → true → prints "partially" ✓ (correct)
+    // After second match: matchedQty=4, incoming->quantity=2
+    // condition: 4 < 2+4=6 → true → prints "partially" ✓ (correct)
+    // Remaining qty 2 rests. No bug here.
+    // But try: incoming qty 4 vs resting qty 4 (exact fill)
+    // matchedQty=4, incoming->quantity=0
+    // condition: 4 < 0+4=4 → FALSE → prints "filled" ✓ (correct)
+    // -------------------------------------------------------
+    cout << "=== TEST 1: Exact fill — should print 'filled' not 'partially filled' ===\n";
+    {
+        OrderBook book;
+        book.addOrder(new Order{1, false, "limit", 100.0, 4, 1000}); // ask qty 4
+        book.addOrder(new Order{2, true,  "limit", 100.0, 4, 1001}); // buy qty 4 — exact match
+        book.printBook(); // should be empty book, matched qty = 4
     }
 
-    // 1. Load message data (6 columns per row)
-    vector<double> flatMessages;
-    string line, token;
-    cout << "Loading Message CSV into memory...\n";
-    while (getline(msgFile, line)) {
-        stringstream ss(line);
-        while (getline(ss, token, ',')) {
-            flatMessages.push_back(stod(token)); 
-        }
+    // -------------------------------------------------------
+    // TEST 2: Incoming order sweeps MULTIPLE levels fully
+    // Tests iterator management when limits are erased mid-loop
+    // -------------------------------------------------------
+    cout << "=== TEST 2: Sweep multiple full levels ===\n";
+    {
+        OrderBook book;
+        book.addOrder(new Order{1, false, "limit", 100.0, 3, 1000});
+        book.addOrder(new Order{2, false, "limit", 101.0, 3, 1001});
+        book.addOrder(new Order{3, false, "limit", 102.0, 3, 1002});
+        // Buy that sweeps all 3 levels exactly
+        book.addOrder(new Order{4, true, "limit", 102.0, 9, 1003});
+        book.printBook(); // should be completely empty, matched = 9
     }
-    msgFile.close();
+    // -------------------------------------------------------
+    // TEST 3: Incoming order sweeps multiple levels with remainder
+    // Tests that leftover quantity rests correctly after sweep
+    // -------------------------------------------------------
+    cout << "=== TEST 3: Sweep + rest remainder ===\n";
+    {
+        OrderBook book;
+        book.addOrder(new Order{1, false, "limit", 100.0, 3, 1000});
+        book.addOrder(new Order{2, false, "limit", 101.0, 3, 1001});
+        // Buy qty 10 sweeps both asks (total 6), rests 4 at 102
+        book.addOrder(new Order{3, true, "limit", 102.0, 10, 1002});
+        book.printBook(); // asks empty, bid @ 102 qty 4
+    }
 
-    int totalEvents = flatMessages.size() / 6; 
-    cout << "Loaded " << totalEvents << " events.\n";
+    // -------------------------------------------------------
+    // TEST 4: Multiple orders at the same price level
+    // Tests time priority — first in should be first matched
+    // -------------------------------------------------------
+    cout << "=== TEST 4: Time priority within same level ===\n";
+    {
+        OrderBook book;
+        book.addOrder(new Order{1, false, "limit", 100.0, 3, 1000}); // first in queue
+        book.addOrder(new Order{2, false, "limit", 100.0, 3, 1001}); // second
+        book.addOrder(new Order{3, false, "limit", 100.0, 3, 1002}); // third
+        book.printBook();
+        // Buy qty 5 — should fill order 1 fully (3), order 2 partially (2)
+        book.addOrder(new Order{4, true, "limit", 100.0, 5, 1003});
+        book.printBook(); // order 1 gone, order 2 qty 1 remaining, order 3 intact
+    }
 
-    OrderBook ob;
-    int mismatches = 0;
+    // -------------------------------------------------------
+    // TEST 5: Amend into a crossing price (should trigger match)
+    // Order 1 is a bid @ 98. Amend it to 102 which crosses ask @ 100
+    // -------------------------------------------------------
+    cout << "=== TEST 5: Amend triggers match ===\n";
+    {
+        OrderBook book;
+        book.addOrder(new Order{1, false, "limit", 100.0, 5, 1000}); // ask @ 100
+        book.addOrder(new Order{2, true,  "limit",  98.0, 5, 1001}); // bid @ 98, no match
+        book.printBook();
+        // Amend bid to 102 — should now cross the ask @ 100
+        book.amendOrder(2, 102.0, 5);
+        book.printBook(); // both orders should be gone, matched = 5
+    }
 
-    // 3. Process and Verify
-    cout << "Processing events and verifying book state...\n";
-    for (int i = 0; i < totalEvents; i++) {
-        int msgIdx = i * 6; 
-        
-        // --- Process Message ---
-        double time      = flatMessages[msgIdx + 0]/10000.0; 
-        int type         = static_cast<int>(flatMessages[msgIdx + 1]); 
-        int id           = static_cast<int>(flatMessages[msgIdx + 2]); 
-        int size         = static_cast<int>(flatMessages[msgIdx + 3]); 
-        double price     = flatMessages[msgIdx + 4];
-        int directionRaw = static_cast<int>(flatMessages[msgIdx + 5]); 
-        
-        bool isBuy = (directionRaw == 1); 
+    // -------------------------------------------------------
+    // TEST 6: Market buy against empty book
+    // -------------------------------------------------------
+    cout << "=== TEST 6: Market buy on empty ask side ===\n";
+    {
+        OrderBook book;
+        book.addOrder(new Order{1, true, "limit", 99.0, 5, 1000}); // only bids, no asks
+        book.placeMarketBuyOrder(5); // should print "No asks available"
+        book.printBook();
+    }
 
-        if (type == 1) {
-            Order newOrder(id, isBuy, "L", price, size, time);
-            ob.addLimitOrder(newOrder);
-        } 
-        else if (type == 2 || type == 4 || type == 5) {
-            ob.reduceOrder(id, size);
-        } 
-        else if (type == 3) {
-            ob.removeOrder(id);
-        }
-        else if (type == 7) {
-            continue;
-        }
-       // Creating a csv file storing the best bid and ask prices and sizes after processing each event, to compare with the orderbook csv file provided by LOBSTER
-        ofstream outFile("my_orderbook.csv", ios::app);
-        vector<double> myTop = ob.printBestBidAsk();
-        outFile << time << "," << myTop[0] << "," << myTop[1] << "," << myTop[2] << "," << myTop[3] << "\n";
-        outFile.close();
+    // -------------------------------------------------------
+    // TEST 7: Market buy partially fills (not enough liquidity)
+    // -------------------------------------------------------
+    cout << "=== TEST 7: Market buy exceeds available liquidity ===\n";
+    {
+        OrderBook book;
+        book.addOrder(new Order{1, false, "limit", 100.0, 3, 1000}); // only 3 available
+        book.placeMarketBuyOrder(10); // should partially fill 3, report 7 remaining
+        book.printBook(); // ask side empty
+    }
+
+    // -------------------------------------------------------
+    // TEST 8: Cancel the only order at a level — level should be cleaned up
+    // -------------------------------------------------------
+    cout << "=== TEST 8: Cancel cleans up empty limit level ===\n";
+    {
+        OrderBook book;
+        book.addOrder(new Order{1, false, "limit", 100.0, 5, 1000});
+        book.addOrder(new Order{2, false, "limit", 101.0, 5, 1001});
+        book.removeOrder(1);
+        book.printBook(); // only 101 level should remain
+    }
+
+    // -------------------------------------------------------
+    // TEST 9: Amend non-existent order — should not crash
+    // -------------------------------------------------------
+    cout << "=== TEST 9: Amend non-existent order ===\n";
+    {
+        OrderBook book;
+        book.amendOrder(999, 100.0, 5); // should print error, not crash
+    }
+
+    // -------------------------------------------------------
+    // TEST 10: Two orders same price, cancel first, second should still match
+    // Tests DLL pointer integrity after removal from middle/head
+    // -------------------------------------------------------
+    cout << "=== TEST 10: Cancel head order, remaining order still matchable ===\n";
+    {
+        OrderBook book;
+        book.addOrder(new Order{1, false, "limit", 100.0, 5, 1000}); // head
+        book.addOrder(new Order{2, false, "limit", 100.0, 5, 1001}); // tail
+        book.removeOrder(1); // remove head
+        book.printBook(); // only order 2 remains at 100
+        book.addOrder(new Order{3, true, "limit", 100.0, 5, 1002}); // should match order 2
+        book.printBook(); // should be empty
     }
 
     return 0;
 }
+    */
 
