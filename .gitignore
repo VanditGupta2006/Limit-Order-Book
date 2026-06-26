@@ -1,0 +1,32 @@
+# ==============================================================================
+# .gitignore — LOB Simulation
+# ==============================================================================
+
+# Compiled binaries
+*.exe
+*.o
+*.out
+*.obj
+
+# Build directory
+build/
+
+# Generated data (large CSV files)
+data/*.csv
+data/gode_sunder/
+data/testing/
+
+# IDE / editor
+.vscode/
+.vs/
+*.suo
+*.user
+*.sln
+*.vcxproj*
+
+# Code Runner temp files
+tempCodeRunnerFile.*
+
+# OS artifacts
+Thumbs.db
+.DS_Store

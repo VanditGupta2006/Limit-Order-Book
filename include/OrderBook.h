@@ -1,4 +1,29 @@
 #pragma once
+
+// ============================================================================
+// OrderBook.h — Price-time priority limit order book (matching engine)
+// ============================================================================
+//
+// Architecture:
+//   Bid side: std::map<double, Limit*, std::greater<double>>  (best bid first)
+//   Ask side: std::map<double, Limit*, std::less<double>>     (best ask first)
+//
+//   Each price level is a Limit object holding a FIFO doubly-linked list of
+//   Order pointers.  The engine owns all Order* and Limit* memory.
+//
+// Matching rules:
+//   - Incoming limit orders are matched against the opposing side using
+//     price-time priority before any residual quantity is rested.
+//   - Market orders walk the opposing book until filled or exhausted.
+//   - Every fill fires the onTrade callback (set by Simulation).
+//
+// Memory management:
+//   - addOrder() takes ownership of the Order*.
+//   - Fully matched orders are deleted immediately.
+//   - removeOrder() deletes the cancelled order.
+//   - The destructor cleans up all remaining Limit and Order objects.
+// ============================================================================
+
 #include <iostream>
 #include <string>
 #include <map>
@@ -7,59 +32,49 @@
 #include <algorithm>
 #include "TradeEvent.h"
 
-using std::map;
-using std::unordered_map;
-using std::string;
-using std::cout;
-using std::cerr;
-using std::greater;
-using std::less;
-using std::min;
-
-// -------------------------------------------------------
 // Forward declaration
-// -------------------------------------------------------
 class Limit;
 
-// -------------------------------------------------------
-// LOBState — snapshot passed to bots each tick
-// -------------------------------------------------------
+// ============================================================================
+// LOBState — lightweight snapshot of the book, passed to bots each tick
+// ============================================================================
 struct LOBState {
-    double bestBid  = -1.0;
-    double bestAsk  = -1.0;
-    double mid      = -1.0;
-    double spread   = -1.0;
-    double bidDepth =  0.0;   // total qty resting on bid side
-    double askDepth =  0.0;   // total qty resting on ask side
-    long long time  =  0;
+    double    bestBid  = -1.0;
+    double    bestAsk  = -1.0;
+    double    mid      = -1.0;
+    double    spread   = -1.0;
+    double    bidDepth =  0.0;   // total qty resting on bid side
+    double    askDepth =  0.0;   // total qty resting on ask side
+    long long time     =  0;
 };
 
-// -------------------------------------------------------
-// Order
-// -------------------------------------------------------
+// ============================================================================
+// Order — a single order sitting in the book
+// ============================================================================
 class Order {
 public:
     int       orderId;
-    int       traderId  = -1;   // -1 = no owner (manual test orders)
+    int       traderId   = -1;     // -1 = no owner (manual test orders)
     bool      isBuy;
-    string    orderType;
+    std::string orderType;
     double    price;
     int       quantity;
     long long timestamp;
 
-    Order* nextOrder  = nullptr;
-    Order* prevOrder  = nullptr;
+    // Doubly-linked list pointers within the parent Limit
+    Order* nextOrder   = nullptr;
+    Order* prevOrder   = nullptr;
     Limit* parentLimit = nullptr;
 
-    Order(int id, int trader, bool buy, string type,
+    Order(int id, int trader, bool buy, std::string type,
           double p, int q, long long ts)
         : orderId(id), traderId(trader), isBuy(buy),
-          orderType(type), price(p), quantity(q), timestamp(ts) {}
+          orderType(std::move(type)), price(p), quantity(q), timestamp(ts) {}
 };
 
-// -------------------------------------------------------
-// Limit — a price level holding a FIFO queue of orders
-// -------------------------------------------------------
+// ============================================================================
+// Limit — a single price level containing a FIFO queue of orders
+// ============================================================================
 class Limit {
 public:
     double price;
@@ -68,12 +83,13 @@ public:
     Order* head;
     Order* tail;
 
-    Limit(double p)
+    explicit Limit(double p)
         : price(p), totalQuantity(0), orderCount(0),
           head(nullptr), tail(nullptr) {}
 
     bool isEmpty() const { return head == nullptr; }
 
+    // Append order to the back of the queue (FIFO — time priority)
     void addOrder(Order* order) {
         order->parentLimit = this;
         order->nextOrder   = nullptr;
@@ -89,6 +105,7 @@ public:
         totalQuantity += order->quantity;
     }
 
+    // Unlink order from the queue (does NOT free memory)
     void removeOrder(Order* order) {
         if (order->prevOrder) order->prevOrder->nextOrder = order->nextOrder;
         else                  head = order->nextOrder;
@@ -96,24 +113,25 @@ public:
         if (order->nextOrder) order->nextOrder->prevOrder = order->prevOrder;
         else                  tail = order->prevOrder;
 
-        order->prevOrder  = nullptr;
-        order->nextOrder  = nullptr;
+        order->prevOrder   = nullptr;
+        order->nextOrder   = nullptr;
         order->parentLimit = nullptr;
         orderCount--;
         totalQuantity -= order->quantity;
     }
 
+    // Debug: print all orders at this price level
     void print() const {
-        cout << "  $" << price << " | vol=" << totalQuantity << " | [ ";
+        std::cout << "  $" << price << " | vol=" << totalQuantity << " | [ ";
         for (Order* o = head; o; o = o->nextOrder)
-            cout << o->orderId << "(q:" << o->quantity << ") ";
-        cout << "]\n";
+            std::cout << o->orderId << "(q:" << o->quantity << ") ";
+        std::cout << "]\n";
     }
 };
 
-// -------------------------------------------------------
-// OrderBook
-// -------------------------------------------------------
+// ============================================================================
+// OrderBook — the core matching engine
+// ============================================================================
 class OrderBook {
 public:
     // Callback — Simulation registers this once at init
@@ -122,16 +140,42 @@ public:
     // Simulation sets this every tick so events are timestamped
     long long simTime = 0;
 
-    map<double, Limit*, greater<double>> bidLimits;  // best bid first
-    map<double, Limit*, less<double>>    askLimits;  // best ask first
-    unordered_map<int, Order*>           orderIdMap;
+    // Price-level maps (sorted for O(log n) best-price access)
+    std::map<double, Limit*, std::greater<double>> bidLimits;  // best bid first
+    std::map<double, Limit*, std::less<double>>    askLimits;  // best ask first
+
+    // Fast lookup: orderId → Order*
+    std::unordered_map<int, Order*> orderIdMap;
+
     int matchedQuantity = 0;
 
-    // -------------------------------------------------------
-    // Core public interface
-    // -------------------------------------------------------
+    // -------------------------------------------------------------------
+    // Destructor — clean up all remaining Limit and Order objects
+    // -------------------------------------------------------------------
+    ~OrderBook() {
+        auto cleanSide = [](auto& side) {
+            for (auto& [price, limit] : side) {
+                Order* curr = limit->head;
+                while (curr) {
+                    Order* next = curr->nextOrder;
+                    delete curr;
+                    curr = next;
+                }
+                delete limit;
+            }
+            side.clear();
+        };
+        cleanSide(bidLimits);
+        cleanSide(askLimits);
+        orderIdMap.clear();
+    }
 
-    // Takes ownership of the Order pointer
+    // -------------------------------------------------------------------
+    // addOrder — takes ownership of the Order pointer
+    //
+    // Attempts to match against the opposing side first.  Any residual
+    // quantity is rested on the appropriate side of the book.
+    // -------------------------------------------------------------------
     void addOrder(Order* order) {
         if (order->isBuy) tryMatch(order, askLimits);
         else              tryMatch(order, bidLimits);
@@ -146,12 +190,13 @@ public:
         else              restOrder(order, askLimits);
     }
 
-    // Amend: update price/qty and re-submit (loses time priority)
-    // Safe: we pull the pointer out of the map before removeOrder touches it
+    // -------------------------------------------------------------------
+    // amendOrder — cancel + re-submit at new price/qty (loses time priority)
+    // -------------------------------------------------------------------
     void amendOrder(int orderId, double newPrice, int newQty) {
         auto it = orderIdMap.find(orderId);
         if (it == orderIdMap.end()) {
-            cerr << "amendOrder: id " << orderId << " not found\n";
+            std::cerr << "amendOrder: id " << orderId << " not found\n";
             return;
         }
         Order* order = it->second;
@@ -165,32 +210,34 @@ public:
         addOrder(order);   // addOrder takes ownership again
     }
 
-    // Cancel: remove from book and free memory
+    // -------------------------------------------------------------------
+    // removeOrder — cancel an order and free its memory
+    // -------------------------------------------------------------------
     void removeOrder(int orderId) {
         auto it = orderIdMap.find(orderId);
         if (it == orderIdMap.end()) {
-            cerr << "removeOrder: id " << orderId << " not found\n";
+            // Silently ignore — order may have already been filled
             return;
         }
         Order* order = it->second;
         removeFromBook(order);
-        delete order;   // free memory — engine owns all Order*
+        delete order;
     }
 
-    // -------------------------------------------------------
-    // Market orders
-    // -------------------------------------------------------
+    // -------------------------------------------------------------------
+    // Market orders — walk the opposing book until filled or exhausted
+    // -------------------------------------------------------------------
 
     void placeMarketBuyOrder(int traderId, int quantity) {
-        if (askLimits.empty()) { cout << "No asks available\n"; return; }
+        if (askLimits.empty()) return;
 
         while (quantity > 0 && !askLimits.empty()) {
-            auto  it      = askLimits.begin();
-            Limit* limit  = it->second;
+            auto   it      = askLimits.begin();
+            Limit* limit   = it->second;
             Order* resting = limit->head;
 
             while (resting && quantity > 0) {
-                int    matchQty   = min(resting->quantity, quantity);
+                int    matchQty   = std::min(resting->quantity, quantity);
                 double tradePrice = resting->price;
 
                 resting->quantity    -= matchQty;
@@ -200,12 +247,12 @@ public:
 
                 if (onTrade) {
                     TradeEvent evt;
-                    evt.timestamp    = simTime;
-                    evt.price        = tradePrice;
-                    evt.quantity     = matchQty;
-                    evt.buyerIsMaker = false;       // buyer is the taker here
+                    evt.timestamp     = simTime;
+                    evt.price         = tradePrice;
+                    evt.quantity      = matchQty;
+                    evt.buyerIsMaker  = false;       // buyer is the taker
                     evt.takerTraderId = traderId;
-                    evt.takerOrderId  = -1;         // market orders have no resting id
+                    evt.takerOrderId  = -1;           // market orders have no resting id
                     evt.makerTraderId = resting->traderId;
                     evt.makerOrderId  = resting->orderId;
                     onTrade(evt);
@@ -218,7 +265,9 @@ public:
                     orderIdMap.erase(filledId);
                     delete resting;
                     resting = next;
-                } else break;
+                } else {
+                    break;
+                }
             }
             if (limit->isEmpty()) {
                 askLimits.erase(it);
@@ -228,15 +277,15 @@ public:
     }
 
     void placeMarketSellOrder(int traderId, int quantity) {
-        if (bidLimits.empty()) { cout << "No bids available\n"; return; }
+        if (bidLimits.empty()) return;
 
         while (quantity > 0 && !bidLimits.empty()) {
-            auto  it      = bidLimits.begin();
-            Limit* limit  = it->second;
+            auto   it      = bidLimits.begin();
+            Limit* limit   = it->second;
             Order* resting = limit->head;
 
             while (resting && quantity > 0) {
-                int    matchQty   = min(resting->quantity, quantity);
+                int    matchQty   = std::min(resting->quantity, quantity);
                 double tradePrice = resting->price;
 
                 resting->quantity    -= matchQty;
@@ -246,10 +295,10 @@ public:
 
                 if (onTrade) {
                     TradeEvent evt;
-                    evt.timestamp    = simTime;
-                    evt.price        = tradePrice;
-                    evt.quantity     = matchQty;
-                    evt.buyerIsMaker = true;        // buyer is the resting maker
+                    evt.timestamp     = simTime;
+                    evt.price         = tradePrice;
+                    evt.quantity      = matchQty;
+                    evt.buyerIsMaker  = true;          // buyer is the resting maker
                     evt.takerTraderId = traderId;
                     evt.takerOrderId  = -1;
                     evt.makerTraderId = resting->traderId;
@@ -264,7 +313,9 @@ public:
                     orderIdMap.erase(filledId);
                     delete resting;
                     resting = next;
-                } else break;
+                } else {
+                    break;
+                }
             }
             if (limit->isEmpty()) {
                 bidLimits.erase(it);
@@ -273,16 +324,18 @@ public:
         }
     }
 
-    // -------------------------------------------------------
+    // -------------------------------------------------------------------
     // Queries
-    // -------------------------------------------------------
+    // -------------------------------------------------------------------
 
     double getBestBid() const {
         return bidLimits.empty() ? -1.0 : bidLimits.begin()->first;
     }
+
     double getBestAsk() const {
         return askLimits.empty() ? -1.0 : askLimits.begin()->first;
     }
+
     double getSpread() const {
         if (bidLimits.empty() || askLimits.empty()) return -1.0;
         return getBestAsk() - getBestBid();
@@ -302,23 +355,22 @@ public:
         return s;
     }
 
+    // Debug: print the full book state
     void printBook() const {
-        cout << "\n=== ORDER BOOK (t=" << simTime << ") ===\n";
-        cout << "-- ASKS --\n";
+        std::cout << "\n=== ORDER BOOK (t=" << simTime << ") ===\n";
+        std::cout << "-- ASKS --\n";
         for (auto& [p, lim] : askLimits) lim->print();
-        cout << "-- BIDS --\n";
+        std::cout << "-- BIDS --\n";
         for (auto& [p, lim] : bidLimits) lim->print();
-        cout << "Spread: " << getSpread()
-             << "  Matched so far: " << matchedQuantity << "\n";
+        std::cout << "Spread: " << getSpread()
+                  << "  Matched so far: " << matchedQuantity << "\n";
     }
 
 private:
-    // -------------------------------------------------------
-    // Internal helpers
-    // -------------------------------------------------------
-
-    // Remove order from book structures only — does NOT delete the pointer.
-    // Used by amendOrder so it can reuse the pointer.
+    // -------------------------------------------------------------------
+    // removeFromBook — unlink from Limit + erase from orderIdMap
+    //                  Does NOT delete the Order pointer (used by amend)
+    // -------------------------------------------------------------------
     void removeFromBook(Order* order) {
         Limit* limit = order->parentLimit;
         limit->removeOrder(order);
@@ -331,6 +383,9 @@ private:
         }
     }
 
+    // -------------------------------------------------------------------
+    // restOrder — place a limit order on the given side of the book
+    // -------------------------------------------------------------------
     template<typename LimitMap>
     void restOrder(Order* order, LimitMap& side) {
         auto it = side.find(order->price);
@@ -345,13 +400,16 @@ private:
         orderIdMap[order->orderId] = order;
     }
 
+    // -------------------------------------------------------------------
+    // tryMatch — match incoming order against the opposing side
+    // -------------------------------------------------------------------
     template<typename LimitMap>
     void tryMatch(Order* incoming, LimitMap& opposing) {
         const bool isBuy = incoming->isBuy;
         auto it = opposing.begin();
 
         while (it != opposing.end() && incoming->quantity > 0) {
-            double  opPrice = it->first;
+            double opPrice = it->first;
 
             // Stop if price no longer crosses
             if (( isBuy && incoming->price < opPrice) ||
@@ -361,12 +419,12 @@ private:
             Order* restingPtr = limit->head;
 
             while (restingPtr && incoming->quantity > 0) {
-                int matchQty = min(restingPtr->quantity, incoming->quantity);
+                int matchQty = std::min(restingPtr->quantity, incoming->quantity);
 
-                restingPtr->quantity    -= matchQty;
-                limit->totalQuantity    -= matchQty;
-                incoming->quantity      -= matchQty;
-                matchedQuantity         += matchQty;
+                restingPtr->quantity -= matchQty;
+                limit->totalQuantity -= matchQty;
+                incoming->quantity   -= matchQty;
+                matchedQuantity      += matchQty;
 
                 // Fire callback
                 if (onTrade) {
