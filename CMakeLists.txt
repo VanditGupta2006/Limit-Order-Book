@@ -19,12 +19,31 @@ endif()
 # Output binary to build/
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR})
 
-# The project is header-only except for main.cpp
+# Headers live in include/
+include_directories(${CMAKE_SOURCE_DIR}/include)
+
+# ---- Main simulation executable ----
 add_executable(lob_sim main.cpp)
 
-# Headers live in include/
-target_include_directories(lob_sim PRIVATE ${CMAKE_SOURCE_DIR}/include)
+# ---- GoogleTest (fetched at configure time) ----
+include(FetchContent)
+FetchContent_Declare(
+    googletest
+    URL https://github.com/google/googletest/archive/refs/tags/v1.15.2.zip
+)
+# Prevent GoogleTest from overriding our compiler/linker options
+set(gtest_force_shared_crt ON CACHE BOOL "" FORCE)
+FetchContent_MakeAvailable(googletest)
+
+enable_testing()
+
+# ---- Unit test executable ----
+add_executable(orderbook_test tests/test_orderbook.cpp)
+target_link_libraries(orderbook_test GTest::gtest_main)
+include(GoogleTest)
+gtest_discover_tests(orderbook_test)
 
 # Print build info
 message(STATUS "Building LOB Simulation (C++17)")
 message(STATUS "Output: ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/lob_sim")
+message(STATUS "Tests:  ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/orderbook_test")

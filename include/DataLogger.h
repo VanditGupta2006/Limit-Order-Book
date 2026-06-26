@@ -14,6 +14,8 @@
 //
 // The constructor opens both files and writes headers.
 // The destructor flushes and closes both files.
+//
+// Note: TradeEvent.price is in integer ticks — we convert to double for CSV.
 // ============================================================================
 
 #include <fstream>
@@ -55,12 +57,12 @@ public:
     DataLogger& operator=(const DataLogger&) = delete;
 
     // -----------------------------------------------------------------------
-    // logTrade — write one trade row
+    // logTrade — write one trade row (converts tick price to double)
     // -----------------------------------------------------------------------
     void logTrade(const TradeEvent& e) {
         if (!tradesFile.is_open()) return;
         tradesFile << e.timestamp      << ","
-                   << e.price          << ","
+                   << fromTicks(e.price) << ","
                    << e.quantity       << ","
                    << e.buyerIsMaker   << ","
                    << e.takerTraderId  << ","
@@ -68,7 +70,7 @@ public:
     }
 
     // -----------------------------------------------------------------------
-    // logSnapshot — write one LOB state row
+    // logSnapshot — write one LOB state row (already in doubles from getState)
     // -----------------------------------------------------------------------
     void logSnapshot(const LOBState& s) {
         if (!snapshotsFile.is_open()) return;

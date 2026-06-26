@@ -5,8 +5,11 @@
 // ============================================================================
 //
 // Architecture:
-//   Bid side: std::map<double, Limit*, std::greater<double>>  (best bid first)
-//   Ask side: std::map<double, Limit*, std::less<double>>     (best ask first)
+//   Bid side: std::map<Price, Limit*, std::greater<Price>>  (best bid first)
+//   Ask side: std::map<Price, Limit*, std::less<Price>>     (best ask first)
+//
+//   Prices are stored as integer ticks (see Types.h) to eliminate
+//   floating-point comparison issues in map keys.
 //
 //   Each price level is a Limit object holding a FIFO doubly-linked list of
 //   Order pointers.  The engine owns all Order* and Limit* memory.
@@ -16,6 +19,8 @@
 //     price-time priority before any residual quantity is rested.
 //   - Market orders walk the opposing book until filled or exhausted.
 //   - Every fill fires the onTrade callback (set by Simulation).
+//   - Self-Trade Prevention (STP): if the incoming order's traderId matches
+//     the resting order's traderId, the resting order is skipped (no fill).
 //
 // Memory management:
 //   - addOrder() takes ownership of the Order*.
@@ -57,7 +62,7 @@ public:
     int       traderId   = -1;     // -1 = no owner (manual test orders)
     bool      isBuy;
     std::string orderType;
-    double    price;
+    Price     price;               // integer ticks (use fromTicks() to display)
     int       quantity;
     long long timestamp;
 
@@ -67,7 +72,7 @@ public:
     Limit* parentLimit = nullptr;
 
     Order(int id, int trader, bool buy, std::string type,
-          double p, int q, long long ts)
+          Price p, int q, long long ts)
         : orderId(id), traderId(trader), isBuy(buy),
           orderType(std::move(type)), price(p), quantity(q), timestamp(ts) {}
 };
@@ -77,13 +82,13 @@ public:
 // ============================================================================
 class Limit {
 public:
-    double price;
+    Price  price;
     double totalQuantity;
     int    orderCount;
     Order* head;
     Order* tail;
 
-    explicit Limit(double p)
+    explicit Limit(Price p)
         : price(p), totalQuantity(0), orderCount(0),
           head(nullptr), tail(nullptr) {}
 
@@ -122,7 +127,7 @@ public:
 
     // Debug: print all orders at this price level
     void print() const {
-        std::cout << "  $" << price << " | vol=" << totalQuantity << " | [ ";
+        std::cout << "  $" << fromTicks(price) << " | vol=" << totalQuantity << " | [ ";
         for (Order* o = head; o; o = o->nextOrder)
             std::cout << o->orderId << "(q:" << o->quantity << ") ";
         std::cout << "]\n";
@@ -140,14 +145,17 @@ public:
     // Simulation sets this every tick so events are timestamped
     long long simTime = 0;
 
-    // Price-level maps (sorted for O(log n) best-price access)
-    std::map<double, Limit*, std::greater<double>> bidLimits;  // best bid first
-    std::map<double, Limit*, std::less<double>>    askLimits;  // best ask first
+    // Price-level maps — keyed by integer ticks for exact comparison
+    std::map<Price, Limit*, std::greater<Price>> bidLimits;  // best bid first
+    std::map<Price, Limit*, std::less<Price>>    askLimits;  // best ask first
 
     // Fast lookup: orderId → Order*
     std::unordered_map<int, Order*> orderIdMap;
 
     int matchedQuantity = 0;
+
+    // Self-Trade Prevention: count of skipped self-trade matches
+    int stpSkipCount = 0;
 
     // -------------------------------------------------------------------
     // Destructor — clean up all remaining Limit and Order objects
@@ -193,7 +201,7 @@ public:
     // -------------------------------------------------------------------
     // amendOrder — cancel + re-submit at new price/qty (loses time priority)
     // -------------------------------------------------------------------
-    void amendOrder(int orderId, double newPrice, int newQty) {
+    void amendOrder(int orderId, Price newPrice, int newQty) {
         auto it = orderIdMap.find(orderId);
         if (it == orderIdMap.end()) {
             std::cerr << "amendOrder: id " << orderId << " not found\n";
@@ -226,19 +234,27 @@ public:
 
     // -------------------------------------------------------------------
     // Market orders — walk the opposing book until filled or exhausted
+    // Self-trade prevention: skip resting orders owned by the same trader
     // -------------------------------------------------------------------
 
     void placeMarketBuyOrder(int traderId, int quantity) {
         if (askLimits.empty()) return;
 
-        while (quantity > 0 && !askLimits.empty()) {
-            auto   it      = askLimits.begin();
+        auto it = askLimits.begin();
+        while (quantity > 0 && it != askLimits.end()) {
             Limit* limit   = it->second;
             Order* resting = limit->head;
 
             while (resting && quantity > 0) {
+                // STP: skip own resting orders
+                if (resting->traderId == traderId) {
+                    resting = resting->nextOrder;
+                    stpSkipCount++;
+                    continue;
+                }
+
                 int    matchQty   = std::min(resting->quantity, quantity);
-                double tradePrice = resting->price;
+                Price  tradePrice = resting->price;
 
                 resting->quantity    -= matchQty;
                 limit->totalQuantity -= matchQty;
@@ -270,8 +286,10 @@ public:
                 }
             }
             if (limit->isEmpty()) {
-                askLimits.erase(it);
+                it = askLimits.erase(it);
                 delete limit;
+            } else {
+                ++it;
             }
         }
     }
@@ -279,14 +297,21 @@ public:
     void placeMarketSellOrder(int traderId, int quantity) {
         if (bidLimits.empty()) return;
 
-        while (quantity > 0 && !bidLimits.empty()) {
-            auto   it      = bidLimits.begin();
+        auto it = bidLimits.begin();
+        while (quantity > 0 && it != bidLimits.end()) {
             Limit* limit   = it->second;
             Order* resting = limit->head;
 
             while (resting && quantity > 0) {
+                // STP: skip own resting orders
+                if (resting->traderId == traderId) {
+                    resting = resting->nextOrder;
+                    stpSkipCount++;
+                    continue;
+                }
+
                 int    matchQty   = std::min(resting->quantity, quantity);
-                double tradePrice = resting->price;
+                Price  tradePrice = resting->price;
 
                 resting->quantity    -= matchQty;
                 limit->totalQuantity -= matchQty;
@@ -318,22 +343,32 @@ public:
                 }
             }
             if (limit->isEmpty()) {
-                bidLimits.erase(it);
+                it = bidLimits.erase(it);
                 delete limit;
+            } else {
+                ++it;
             }
         }
     }
 
     // -------------------------------------------------------------------
-    // Queries
+    // Queries — return doubles for external consumers
     // -------------------------------------------------------------------
 
     double getBestBid() const {
-        return bidLimits.empty() ? -1.0 : bidLimits.begin()->first;
+        return bidLimits.empty() ? -1.0 : fromTicks(bidLimits.begin()->first);
     }
 
     double getBestAsk() const {
-        return askLimits.empty() ? -1.0 : askLimits.begin()->first;
+        return askLimits.empty() ? -1.0 : fromTicks(askLimits.begin()->first);
+    }
+
+    Price getBestBidTick() const {
+        return bidLimits.empty() ? -1 : bidLimits.begin()->first;
+    }
+
+    Price getBestAskTick() const {
+        return askLimits.empty() ? -1 : askLimits.begin()->first;
     }
 
     double getSpread() const {
@@ -363,7 +398,8 @@ public:
         std::cout << "-- BIDS --\n";
         for (auto& [p, lim] : bidLimits) lim->print();
         std::cout << "Spread: " << getSpread()
-                  << "  Matched so far: " << matchedQuantity << "\n";
+                  << "  Matched so far: " << matchedQuantity
+                  << "  STP skips: " << stpSkipCount << "\n";
     }
 
 private:
@@ -402,6 +438,7 @@ private:
 
     // -------------------------------------------------------------------
     // tryMatch — match incoming order against the opposing side
+    // Self-trade prevention: skip resting orders from the same trader
     // -------------------------------------------------------------------
     template<typename LimitMap>
     void tryMatch(Order* incoming, LimitMap& opposing) {
@@ -409,7 +446,7 @@ private:
         auto it = opposing.begin();
 
         while (it != opposing.end() && incoming->quantity > 0) {
-            double opPrice = it->first;
+            Price opPrice = it->first;
 
             // Stop if price no longer crosses
             if (( isBuy && incoming->price < opPrice) ||
@@ -419,6 +456,13 @@ private:
             Order* restingPtr = limit->head;
 
             while (restingPtr && incoming->quantity > 0) {
+                // STP: skip if same trader
+                if (restingPtr->traderId == incoming->traderId) {
+                    restingPtr = restingPtr->nextOrder;
+                    stpSkipCount++;
+                    continue;
+                }
+
                 int matchQty = std::min(restingPtr->quantity, incoming->quantity);
 
                 restingPtr->quantity -= matchQty;

@@ -10,7 +10,7 @@
 //
 // Fields:
 //   timestamp     — simulation tick at which the trade occurred
-//   price         — execution price (always the resting order's price)
+//   price         — execution price in integer ticks (use fromTicks() to display)
 //   quantity      — number of units traded in this fill
 //   buyerIsMaker  — true if the resting (maker) order was a bid
 //   takerTraderId — bot ID of the aggressive (incoming) order
@@ -19,9 +19,11 @@
 //   makerOrderId  — order ID of the resting order
 // ============================================================================
 
+#include "Types.h"
+
 struct TradeEvent {
     long long timestamp    = 0;
-    double    price        = 0.0;
+    Price     price        = 0;      // integer ticks — use fromTicks() to display
     int       quantity     = 0;
     bool      buyerIsMaker = false;   // true = resting order was a bid
 

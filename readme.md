@@ -104,6 +104,46 @@ cl /std:c++17 /EHsc /O2 /I include /Fe:lob_sim.exe main.cpp
 
 ---
 
+## Running Unit Tests
+
+The project uses [GoogleTest](https://github.com/google/googletest) (fetched automatically by CMake on first build).
+
+### Build & run tests
+
+```bash
+# Build everything (simulation + tests)
+cmake -S . -B build
+cmake --build build
+
+# Run all tests
+cd build && ctest --output-on-failure
+
+# Or run the test binary directly for detailed output
+./build/orderbook_test
+```
+
+### Run specific tests
+
+```bash
+# Run only STP tests
+./build/orderbook_test --gtest_filter="SelfTradePrevention.*"
+
+# Run only matching engine tests
+./build/orderbook_test --gtest_filter="OrderBook.*"
+
+# Run a single test
+./build/orderbook_test --gtest_filter="OrderBook.PartialFillResting"
+```
+
+### Test coverage (28 tests)
+
+| Suite | Tests | What it covers |
+|-------|-------|----------------|
+| `PriceTicks` | 3 | Integer tick conversion, 0.1+0.2 edge case |
+| `OrderBook` | 20 | Placement, matching, partial fills, market orders, cancel, amend, multi-level walk, stress test |
+| `SelfTradePrevention` | 4 | STP for limit orders, market buy/sell, cross-trader matching |
+| `Simulation` | 1 | Bot tick-gap enforcement |
+
 ## How to Run
 
 ```bash

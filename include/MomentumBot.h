@@ -48,11 +48,12 @@ public:
     // thresh        — trigger threshold as fraction (default 0.005 = 0.5%)
     // actProb       — probability of acting when signal fires (default 0.6)
     // maxInv        — maximum absolute inventory (default 50)
+    // tickGap       — minimum ticks between actions (default 1)
     // -----------------------------------------------------------------------
     MomentumBot(int id, double cash,
                 int window = 20, double thresh = 0.005,
-                double actProb = 0.6, int maxInv = 50)
-        : Bot(id, cash),
+                double actProb = 0.6, int maxInv = 50, int tickGap = 1)
+        : Bot(id, cash, tickGap),
           rng(static_cast<unsigned>(id)),
           qtyDist(1, 5),
           actDist(actProb),

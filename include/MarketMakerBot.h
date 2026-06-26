@@ -42,11 +42,12 @@ public:
     // halfSpr      — half the quoted spread (default 0.5)
     // quoteSz      — quantity per side (default 10)
     // invLimit     — maximum absolute inventory (default 100)
+    // tickGap      — minimum ticks between actions (default 1)
     // -----------------------------------------------------------------------
     MarketMakerBot(int id, double cash,
                    double halfSpr = 0.5, int quoteSz = 10,
-                   int invLimit = 100)
-        : Bot(id, cash),
+                   int invLimit = 100, int tickGap = 1)
+        : Bot(id, cash, tickGap),
           halfSpread(halfSpr),
           quoteSize(quoteSz),
           inventoryLimit(invLimit) {}

@@ -10,14 +10,19 @@
 //     1. Increment simulation clock
 //     2. Take LOB state snapshot
 //     3. For each bot:
-//        a. Process cancels from BotAction
-//        b. Submit orders from BotAction (limit or market)
+//        a. Check minTickGap — skip if bot isn't allowed to act yet
+//        b. Process cancels from BotAction
+//        c. Submit orders from BotAction (limit or market)
 //     4. Log snapshot via DataLogger (if attached)
 //
 // Ownership:
 //   - Bots are owned via unique_ptr
 //   - DataLogger is NOT owned (external lifetime management)
 //   - OrderBook is owned directly as a member
+//
+// Price conversion:
+//   Bots produce OrderRequest with double prices.  Simulation converts
+//   these to integer ticks (toTicks) before creating Order objects.
 //
 // MarketMakerBot integration:
 //   After submitting orders for a MarketMakerBot, we call registerOrderId()
@@ -97,7 +102,13 @@ public:
         LOBState state = book.getState();
 
         for (auto& bot : bots) {
+            // Latency simulation: skip if bot isn't allowed to act yet
+            if (simTime < bot->nextAllowedTick) continue;
+
             BotAction action = bot->act(state, simTime);
+
+            // Update next allowed tick
+            bot->nextAllowedTick = simTime + bot->minTickGap;
 
             // Process cancels first
             for (const auto& cancel : action.cancels) {
@@ -114,9 +125,10 @@ public:
                     if (req.isBuy) book.placeMarketBuyOrder(bot->traderId, req.quantity);
                     else           book.placeMarketSellOrder(bot->traderId, req.quantity);
                 } else {
-                    // Limit order
+                    // Limit order — convert double price to integer ticks
+                    Price tickPrice = toTicks(req.price);
                     Order* o = new Order(oid, bot->traderId, req.isBuy,
-                                         "limit", req.price, req.quantity, simTime);
+                                         "limit", tickPrice, req.quantity, simTime);
                     bot->activeOrders[oid] = req.price;
                     book.addOrder(o);
 
@@ -159,6 +171,7 @@ public:
         std::cout << "  Ticks run     : " << simTime << "\n";
         std::cout << "  Total trades  : " << tradeLog.size() << "\n";
         std::cout << "  Final mid     : " << finalState.mid << "\n";
+        std::cout << "  STP skips     : " << book.stpSkipCount << "\n";
 
         if (spreadCount > 0) {
             std::cout << "  Avg spread    : " << (spreadSum / spreadCount) << "\n";
@@ -171,7 +184,8 @@ public:
             std::cout << "    Bot " << b->traderId
                       << " | cash=" << b->cash
                       << " | inventory=" << b->inventory
-                      << " | active=" << b->activeOrders.size() << "\n";
+                      << " | active=" << b->activeOrders.size()
+                      << " | gap=" << b->minTickGap << "\n";
         }
     }
 

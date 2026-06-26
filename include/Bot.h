@@ -11,6 +11,11 @@
 // The Simulation loop calls act() on every bot each tick, then processes
 // the returned BotAction.  Fill notifications arrive via onFill().
 //
+// Latency simulation:
+//   - minTickGap controls how frequently a bot can act (in ticks)
+//   - nextAllowedTick is managed by the Simulation to enforce the gap
+//   - Higher minTickGap = slower/more latent trader
+//
 // Inventory tracking:
 //   - cash decreases when buying, increases when selling
 //   - inventory increases when buying, decreases when selling
@@ -19,7 +24,7 @@
 
 #include <vector>
 #include <unordered_map>
-#include "OrderBook.h"   // gives us LOBState and TradeEvent
+#include "OrderBook.h"   // gives us LOBState, TradeEvent, Price, fromTicks
 
 // ---------------------------------------------------------------------------
 // OrderRequest — describes a limit or market order to submit
@@ -54,10 +59,15 @@ public:
     double cash;
     int    inventory = 0;   // positive = long, negative = short
 
+    // Latency simulation: bot can only act every minTickGap ticks
+    int    minTickGap      = 1;   // default: act every tick
+    long long nextAllowedTick = 0;   // managed by Simulation
+
     // orderId → price: tracks every resting order this bot owns
     std::unordered_map<int, double> activeOrders;
 
-    Bot(int id, double startCash) : traderId(id), cash(startCash) {}
+    Bot(int id, double startCash, int tickGap = 1)
+        : traderId(id), cash(startCash), minTickGap(tickGap) {}
     virtual ~Bot() = default;
 
     // -----------------------------------------------------------------------
@@ -70,22 +80,22 @@ public:
     //
     // wasMaker=true  → this bot's resting order was hit
     // wasMaker=false → this bot sent the aggressive order
+    //
+    // Note: TradeEvent.price is in integer ticks — use fromTicks() for cash.
     // -----------------------------------------------------------------------
     virtual void onFill(const TradeEvent& evt, bool wasMaker) {
         // Determine if this bot bought or sold
         bool bought = ( wasMaker &&  evt.buyerIsMaker) ||
                       (!wasMaker && !evt.buyerIsMaker);
 
-        // Note: buyerIsMaker=true means the maker was the buyer.
-        // If we are the maker and buyerIsMaker is true, we bought.
-        // If we are the taker and buyerIsMaker is false, the taker is buyer → we bought.
+        double fillPrice = fromTicks(evt.price);
 
         if (bought) {
             inventory += evt.quantity;
-            cash      -= evt.price * evt.quantity;
+            cash      -= fillPrice * evt.quantity;
         } else {
             inventory -= evt.quantity;
-            cash      += evt.price * evt.quantity;
+            cash      += fillPrice * evt.quantity;
         }
 
         // Remove from active tracking if fully filled

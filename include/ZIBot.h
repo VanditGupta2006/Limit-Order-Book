@@ -35,11 +35,12 @@ public:
     // minPrice — lower bound of the price range
     // maxPrice — upper bound of the price range
     // actProb  — probability of acting on any given tick (default 0.7)
+    // tickGap  — minimum ticks between actions (default 1)
     // -----------------------------------------------------------------------
     ZIBot(int id, double cash,
           double minPrice, double maxPrice,
-          double actProb = 0.7)
-        : Bot(id, cash),
+          double actProb = 0.7, int tickGap = 1)
+        : Bot(id, cash, tickGap),
           rng(static_cast<unsigned>(id)),
           priceDist(minPrice, maxPrice),
           qtyDist(1, 5),

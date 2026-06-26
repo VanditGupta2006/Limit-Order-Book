@@ -44,11 +44,12 @@ public:
     // window          — lookback window for rolling mean (default 30)
     // revStrength     — multiplier on spread for trigger threshold (default 1.5)
     // actProb         — probability of acting when signal fires (default 0.5)
+    // tickGap         — minimum ticks between actions (default 1)
     // -----------------------------------------------------------------------
     MeanReversionBot(int id, double cash,
                      int window = 30, double revStrength = 1.5,
-                     double actProb = 0.5)
-        : Bot(id, cash),
+                     double actProb = 0.5, int tickGap = 1)
+        : Bot(id, cash, tickGap),
           rng(static_cast<unsigned>(id)),
           qtyDist(1, 3),
           actDist(actProb),
