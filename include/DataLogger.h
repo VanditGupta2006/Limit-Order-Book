@@ -43,7 +43,10 @@ public:
         if (!snapshotsFile.is_open()) {
             std::cerr << "DataLogger: failed to open " << snapshotsPath << "\n";
         }
-        snapshotsFile << "timestamp,bestBid,bestAsk,mid,spread,bidDepth,askDepth\n";
+        snapshotsFile << "timestamp,bestBid,bestAsk,mid,spread,bidDepth,askDepth";
+        for (int i = 1; i <= 5; ++i) snapshotsFile << ",bidPrice" << i << ",bidVol" << i;
+        for (int i = 1; i <= 5; ++i) snapshotsFile << ",askPrice" << i << ",askVol" << i;
+        snapshotsFile << "\n";
     }
 
     // Destructor — flush and close
@@ -80,6 +83,9 @@ public:
                       << s.mid      << ","
                       << s.spread   << ","
                       << s.bidDepth << ","
-                      << s.askDepth << "\n";
+                      << s.askDepth;
+        for (int i = 0; i < 5; ++i) snapshotsFile << "," << s.bidPrices[i] << "," << s.bidVols[i];
+        for (int i = 0; i < 5; ++i) snapshotsFile << "," << s.askPrices[i] << "," << s.askVols[i];
+        snapshotsFile << "\n";
     }
 };

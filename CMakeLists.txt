@@ -26,6 +26,8 @@ include_directories(${CMAKE_SOURCE_DIR}/include)
 add_executable(lob_sim main.cpp)
 
 # ---- GoogleTest (fetched at configure time) ----
+# Disable TLS verification to prevent SSL certificate errors on some systems
+set(CMAKE_TLS_VERIFY OFF)
 include(FetchContent)
 FetchContent_Declare(
     googletest

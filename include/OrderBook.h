@@ -51,6 +51,11 @@ struct LOBState {
     double    bidDepth =  0.0;   // total qty resting on bid side
     double    askDepth =  0.0;   // total qty resting on ask side
     long long time     =  0;
+
+    double bidPrices[5] = {0, 0, 0, 0, 0};
+    double bidVols[5]   = {0, 0, 0, 0, 0};
+    double askPrices[5] = {0, 0, 0, 0, 0};
+    double askVols[5]   = {0, 0, 0, 0, 0};
 };
 
 // ============================================================================
@@ -387,6 +392,19 @@ public:
         for (auto& [p, lim] : bidLimits) s.bidDepth += lim->totalQuantity;
         for (auto& [p, lim] : askLimits) s.askDepth += lim->totalQuantity;
         s.time = simTime;
+
+        int i = 0;
+        for (auto it = bidLimits.begin(); it != bidLimits.end() && i < 5; ++it, ++i) {
+            s.bidPrices[i] = fromTicks(it->first);
+            s.bidVols[i]   = it->second->totalQuantity;
+        }
+
+        i = 0;
+        for (auto it = askLimits.begin(); it != askLimits.end() && i < 5; ++it, ++i) {
+            s.askPrices[i] = fromTicks(it->first);
+            s.askVols[i]   = it->second->totalQuantity;
+        }
+
         return s;
     }
 

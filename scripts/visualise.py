@@ -130,6 +130,11 @@ def compute_features(trades, snaps):
     features["bid_depth"] = snaps["bidDepth"].values
     features["ask_depth"] = snaps["askDepth"].values
 
+    # --- 5-level depth ---
+    for i in range(1, 6):
+        features[f"bid_vol_{i}"] = snaps.get(f"bidVol{i}", pd.Series(np.zeros(len(snaps)))).values
+        features[f"ask_vol_{i}"] = snaps.get(f"askVol{i}", pd.Series(np.zeros(len(snaps)))).values
+
     return features
 
 
@@ -275,17 +280,29 @@ def plot_volume_and_depth(snaps, features, output_dir, prefix):
     ax1.grid(True, alpha=0.3, color=GRID_COLOR)
     ax1.spines[["top", "right"]].set_visible(False)
 
-    # --- Bottom: bid/ask depth ---
+    # --- Bottom: bid/ask depth (5 levels) ---
     ax2.set_facecolor(BG_COLOR)
-    ax2.fill_between(time, 0, features["bid_depth"],
-                     alpha=0.5, color=BID_COLOR, label="Bid depth")
-    ax2.fill_between(time, 0, -features["ask_depth"].astype(float),
-                     alpha=0.5, color=ASK_COLOR, label="Ask depth")
+    bid_vols = [features[f"bid_vol_{i}"] for i in range(1, 6)]
+    ask_vols = [-features[f"ask_vol_{i}"].astype(float) for i in range(1, 6)]
+
+    # Use a gradient of greens and reds
+    bid_colors = plt.cm.Greens(np.linspace(0.8, 0.4, 5))
+    ask_colors = plt.cm.Reds(np.linspace(0.8, 0.4, 5))
+
+    ax2.stackplot(time, bid_vols, colors=bid_colors, alpha=0.7)
+    ax2.stackplot(time, ask_vols, colors=ask_colors, alpha=0.7)
     ax2.axhline(0, color="#666", linewidth=0.5)
 
     ax2.set_ylabel("Depth (bid +, ask −)", fontsize=10)
     ax2.set_xlabel("Tick", fontsize=10)
-    ax2.legend(fontsize=8)
+    
+    # Custom legend for levels
+    from matplotlib.patches import Patch
+    legend_elements = [Patch(facecolor=bid_colors[0], alpha=0.7, label='Bid L1'),
+                       Patch(facecolor=bid_colors[4], alpha=0.7, label='Bid L5'),
+                       Patch(facecolor=ask_colors[0], alpha=0.7, label='Ask L1'),
+                       Patch(facecolor=ask_colors[4], alpha=0.7, label='Ask L5')]
+    ax2.legend(handles=legend_elements, fontsize=8, loc='upper left')
     ax2.grid(True, alpha=0.3, color=GRID_COLOR)
     ax2.spines[["top", "right"]].set_visible(False)
 

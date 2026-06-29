@@ -135,6 +135,48 @@ void runConfig3(const std::string& dataDir) {
 }
 
 // ============================================================================
+// Config 4: Custom Large Market — 25 ZI + 10 Momentum + 10 MeanRev + 5 MM
+// ============================================================================
+void runConfig4(const std::string& dataDir) {
+    std::cout << "\n" << std::string(60, '=') << "\n";
+    std::cout << "  CONFIG 4: Large Market (25 ZI + 10 Momentum + 10 MeanRev + 5 MM)\n";
+    std::cout << std::string(60, '=') << "\n";
+
+    DataLogger logger(dataDir + "/config4_trades.csv",
+                      dataDir + "/config4_snapshots.csv");
+    Simulation sim(&logger);
+
+    int id = 0;
+
+    // 25 ZI bots (gap=2)
+    for (int i = 0; i < 25; i++) {
+        sim.addBot(std::make_unique<ZIBot>(id++, START_CASH, MIN_PRICE, MAX_PRICE,
+                                            0.7, ZI_GAP));
+    }
+
+    // 10 Momentum bots (window=20, threshold=0.5%, actProb=0.6, maxInv=50, gap=3)
+    for (int i = 0; i < 10; i++) {
+        sim.addBot(std::make_unique<MomentumBot>(id++, START_CASH,
+                                                  20, 0.005, 0.6, 50, SIGNAL_GAP));
+    }
+
+    // 10 Mean Reversion bots (window=30, revStrength=1.5, actProb=0.5, gap=3)
+    for (int i = 0; i < 10; i++) {
+        sim.addBot(std::make_unique<MeanReversionBot>(id++, START_CASH,
+                                                       30, 1.5, 0.5, SIGNAL_GAP));
+    }
+
+    // 5 Market Maker bots (gap=1)
+    for (int i = 0; i < 5; i++) {
+        sim.addBot(std::make_unique<MarketMakerBot>(id++, START_CASH,
+                                                     0.5, 10, 100, MM_GAP));
+    }
+
+    sim.run(NUM_TICKS);
+    sim.printSummary();
+}
+
+// ============================================================================
 // Main
 // ============================================================================
 int main() {
@@ -154,6 +196,7 @@ int main() {
     runConfig1(dataDir);
     runConfig2(dataDir);
     runConfig3(dataDir);
+    runConfig4(dataDir);
 
     std::cout << "\n" << std::string(60, '=') << "\n";
     std::cout << "  All simulations complete. CSVs written to data/\n";
