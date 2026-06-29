@@ -43,7 +43,22 @@ target_link_libraries(orderbook_test GTest::gtest_main)
 include(GoogleTest)
 gtest_discover_tests(orderbook_test)
 
+# ---- Google Benchmark (fetched at configure time) ----
+set(BENCHMARK_ENABLE_TESTING OFF CACHE BOOL "" FORCE)
+set(BENCHMARK_ENABLE_GTEST_TESTS OFF CACHE BOOL "" FORCE)
+set(BENCHMARK_ENABLE_WERROR OFF CACHE BOOL "" FORCE)
+FetchContent_Declare(
+    googlebenchmark
+    URL https://github.com/google/benchmark/archive/refs/tags/v1.9.1.zip
+)
+FetchContent_MakeAvailable(googlebenchmark)
+
+# ---- Benchmark executable ----
+add_executable(orderbook_benchmark benchmarks/benchmark_orderbook.cpp)
+target_link_libraries(orderbook_benchmark benchmark::benchmark benchmark::benchmark_main)
+
 # Print build info
 message(STATUS "Building LOB Simulation (C++17)")
-message(STATUS "Output: ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/lob_sim")
-message(STATUS "Tests:  ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/orderbook_test")
+message(STATUS "Output:     ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/lob_sim")
+message(STATUS "Tests:      ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/orderbook_test")
+message(STATUS "Benchmarks: ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/orderbook_benchmark")

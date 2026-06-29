@@ -13,6 +13,7 @@ This project implements a price-time priority limit order book matching engine p
 
 ---
 
+
 ## Architecture
 
 ```
@@ -42,6 +43,11 @@ This project implements a price-time priority limit order book matching engine p
 │  └──────────────────────────────────────────────┘   │
 └─────────────────────────────────────────────────────┘
 ```
+
+## Order Matching Architecture
+-  Order Matching follows FIFO (First-In-First-Out) based matching (on timestamp);
+-  Orders on the same timestamp are processed in order of Bots added in main.cpp;
+-  Traded Price is the Resting Order Price in log book.
 
 ### Project Structure
 
@@ -104,6 +110,55 @@ cl /std:c++17 /EHsc /O2 /I include /Fe:lob_sim.exe main.cpp
 
 ---
 
+## Running the Components
+
+Once the project is successfully built, you can run each of the components as follows:
+
+### 1. Run the Market Simulation
+Executes the trading bot simulation configs and generates trade and snapshot logs inside `data/`:
+```bash
+# On Linux/macOS:
+./build/lob_sim
+
+# On Windows:
+.\build\lob_sim.exe
+```
+
+### 2. Run the Python Visualiser
+Parses the generated CSV files to create performance plots and save them:
+```bash
+# Install dependencies first:
+pip install pandas numpy matplotlib scipy
+
+# Visualise Config 1 (Noise Only):
+python scripts/visualise.py --dir data --trades config1_trades.csv --snapshots config1_snapshots.csv --show
+```
+
+### 3. Run the Unit Tests
+Runs the GoogleTest suite (28 test cases verifying matching engine logic, self-trade prevention, and latencies):
+```bash
+# On Linux/macOS:
+./build/orderbook_test
+
+# On Windows:
+.\build\orderbook_test.exe
+
+# Or run via CTest:
+cd build && ctest --output-on-failure
+```
+
+### 4. Run the Performance Benchmarks
+Runs the Google Benchmark suite to measure microsecond/nanosecond latencies of the order book operations:
+```bash
+# On Linux/macOS:
+./build/orderbook_benchmark
+
+# On Windows:
+.\build\orderbook_benchmark.exe
+```
+
+---
+
 ## Running Unit Tests
 
 The project uses [GoogleTest](https://github.com/google/googletest) (fetched automatically by CMake on first build).
@@ -112,7 +167,7 @@ The project uses [GoogleTest](https://github.com/google/googletest) (fetched aut
 
 ```bash
 # Build everything (simulation + tests)
-cmake -S . -B build
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
 cmake --build build
 
 # Run all tests
@@ -144,10 +199,48 @@ cd build && ctest --output-on-failure
 | `SelfTradePrevention` | 4 | STP for limit orders, market buy/sell, cross-trader matching |
 | `Simulation` | 1 | Bot tick-gap enforcement |
 
-## How to Run
+---
+
+## Performance Benchmarking
+
+The project integrates [Google Benchmark](https://github.com/google/benchmark) to measure matching engine latencies. Benchmarks are built in **Release mode** to capture true execution speed.
+
+### Build & run benchmarks
 
 ```bash
-./lob_sim          # or lob_sim.exe on Windows
+# Configure in Release mode (disable TLS verify if there are SSL issues during download)
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+cmake --build build --target orderbook_benchmark
+
+# Run the benchmark binary
+./build/orderbook_benchmark
+```
+
+### Benchmark Results (Release Mode)
+
+Running on a 6-core Intel/AMD CPU, the engine achieves **sub-microsecond latencies** and can match up to **8.2 Million orders per second**:
+
+| Operation | Latency (ns) | Throughput / sec | Description |
+|-----------|--------------|-------------------|-------------|
+| `BM_GetBestBid` | **0.93 ns** | ~1.07 Billion/s | Query top-of-book bid price (O(1) cached lookup) |
+| `BM_GetBestAsk` | **0.94 ns** | ~1.06 Billion/s | Query top-of-book ask price (O(1) cached lookup) |
+| `BM_GetState` | **252 ns** | ~3.97 Million/s | Generating full `LOBState` (mid, spread, depths) |
+| `BM_PlaceLimitOrder_NewLevel` | **708 ns** | ~1.41 Million/s | Place order on a new price level (requires map insertion) |
+| `BM_PlaceLimitOrder_ExistingLevel` | **889 ns** | ~1.12 Million/s | Place order on an existing price level (FIFO queue push) |
+| `BM_PlaceMarketOrder_Cross1` | **1,084 ns** | ~922,000/s | Place market order matching 1 resting price level |
+| `BM_PlaceMarketOrder_Cross3` | **1,798 ns** | ~556,000/s | Place market order matching 3 resting price levels |
+| `BM_RemoveOrder` | **914 ns** | ~1.09 Million/s | Cancel a resting order by ID (removal from DLL + map lookup) |
+| `BM_FullCycle_LimitMatch` | **639 ns** | ~1.56 Million/s | Place limit sell + place limit buy that instantly fills it |
+| `BM_SimulationTick` | **12,817 ns** | ~78,000/s | Execute 1 simulation tick with 20 active ZI trading bots |
+| `BM_Throughput/10000` | **243 ns / order** | **8.22 Million/s** | Sequential order match throughput |
+
+---
+
+## How to Run the Simulation
+
+```bash
+# Run the compiled simulator
+./build/lob_sim          # or .\build\lob_sim.exe on Windows
 ```
 
 This runs **three simulation configurations** (10,000 ticks each):
